@@ -32,11 +32,11 @@ spec:
       storagesize: 512Mi 
     vault:
       role: vault-role
-      address: http://45.32.124.125:8200/
+      address: http://192.168.50.152:8200
       authpath: devsupplychain-net-auth
-      secretcert: hoangle/crypto/ordererOrganizations/supplychain-net/ca?ca.supplychain-net-cert.pem
-      secretkey: hoangle/crypto/ordererOrganizations/supplychain-net/ca?supplychain-net-CA.key
-      secretadminpass: hoangle/credentials/supplychain-net/ca/supplychain?user
+      secretcert: baf-secret/crypto/ordererOrganizations/supplychain-net/ca?ca.supplychain-net-cert.pem
+      secretkey: baf-secret/crypto/ordererOrganizations/supplychain-net/ca?supplychain-net-CA.key
+      secretadminpass: baf-secret/credentials/supplychain-net/ca/supplychain?user
       serviceaccountname: vault-auth
       imagesecretname: regcred
     service:

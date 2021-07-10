@@ -1,130 +1,130 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Networking
+private_ip = ENV['PRIVATE_IP'] || "192.168.50.152"
+
+# Base box selection
+base_box = ENV['BASE_BOX'] || "bento/ubuntu-16.04"
+
+# Consul variables
+consul_install = ["true", "1"].include?((ENV['CONSUL_INSTALL'] || true).to_s.downcase)
+consul_host_port = ENV['CONSUL_HOST_PORT'] || 8500
+consul_version = ENV['CONSUL_VERSION'] || "1.6.1"
+consul_ent_url = ENV['CONSUL_ENT_URL']
+consul_group = "consul"
+consul_user = "consul"
+consul_comment = "Consul"
+consul_home = "/srv/consul"
+
+# Vault variables
+vault_host_port = ENV['VAULT_HOST_PORT'] || 8200
+vault_version = ENV['VAULT_VERSION'] || "1.7.3"
+vault_ent_url = ENV['VAULT_ENT_URL']
+vault_group = "vault"
+vault_user = "vault"
+vault_comment = "Vault"
+vault_home = "/srv/vault"
+
 Vagrant.configure("2") do |config|
-  config.vm.provision :shell, privileged: true, inline: $install_common_tools
+  # Use vagrant insecure public key, comment this out to restrict access
+  config.ssh.insert_key = false
 
-  config.vm.define :master do |master|
-    master.vm.provider :virtualbox do |vb|
-      vb.name = "master"
-      vb.memory = 2048
-      vb.cpus = 2
-    end
-    master.vm.box = "ubuntu/bionic64"
-    master.disksize.size = "25GB"
-    master.vm.hostname = "master"
-    master.vm.network :private_network, ip: "10.0.0.10"
-    master.vm.provision :shell, privileged: false, inline: $provision_master_node
+  # Setup networking
+  config.vm.network :private_network, ip: private_ip
+  config.vm.network "private_network", type: "dhcp"
+
+  # Use base_box set at the top of this file
+  config.vm.box = base_box
+  config.vm.hostname = "vault"
+
+  # Bootstrap the vm
+  config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/shared/scripts/base.sh | bash"
+
+  if (consul_install)
+    # Forward Consul port
+    config.vm.network :forwarded_port, guest: 8500, host: consul_host_port, auto_correct: true
+
+    # Setup Consul user
+    config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/shared/scripts/setup-user.sh | bash",
+      env: {
+        "GROUP" => consul_group,
+        "USER" => consul_user,
+        "COMMENT" => consul_comment,
+        "HOME" => consul_home,
+      }
+
+    # Install Consul
+    config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/consul/scripts/install-consul.sh | bash",
+      env: {
+        "VERSION" => consul_version,
+        "URL" => consul_ent_url,
+        "USER" => consul_user,
+        "GROUP" => consul_group,
+      }
+
+    config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/consul/scripts/install-consul-systemd.sh | bash"
   end
 
-  %w{node1 node2}.each_with_index do |name, i|
-    config.vm.define name do |node|
-      node.vm.provider "virtualbox" do |vb|
-        vb.name = "node#{i + 1}"
-        vb.memory = 2048
-        vb.cpus = 2
-      end
-      node.vm.box = "ubuntu/bionic64"
-      node.disksize.size = "25GB"
-      node.vm.hostname = name
-      node.vm.network :private_network, ip: "10.0.0.#{i + 11}"
-      node.vm.provision :shell, privileged: false, inline: <<-SHELL
-sudo /vagrant/join.sh
-echo 'Environment="KUBELET_EXTRA_ARGS=--node-ip=10.0.0.#{i + 11}"' | sudo tee -a /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-cat /vagrant/id_rsa.pub >> /home/vagrant/.ssh/authorized_keys
-sudo systemctl daemon-reload
-sudo systemctl restart kubelet
-SHELL
+  # Forward Vault port
+  config.vm.network :forwarded_port, guest: 8200, host: vault_host_port, auto_correct: true
+
+  # Setup Vault user
+  config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/shared/scripts/setup-user.sh | bash",
+    env: {
+      "GROUP" => vault_group,
+      "USER" => vault_user,
+      "COMMENT" => vault_comment,
+      "HOME" => vault_home,
+    }
+
+  # Install Vault
+  config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/vault/scripts/install-vault.sh | bash",
+    env: {
+      "VERSION" => vault_version,
+      "URL" => vault_ent_url,
+      "USER" => vault_user,
+      "GROUP" => vault_group,
+    }
+
+  config.vm.provision "shell", inline: "curl https://raw.githubusercontent.com/hashicorp/guides-configuration/master/vault/scripts/install-vault-systemd.sh | bash"
+
+  # Increase memory for Parallels Desktop
+  config.vm.provider "parallels" do |p, o|
+    p.memory = "1024"
+  end
+
+  # Increase memory for Virtualbox
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "1024"
+  end
+
+  # Increase memory for VMware
+  ["vmware_fusion", "vmware_workstation"].each do |p|
+    config.vm.provider p do |v|
+      v.vmx["memsize"] = "1024"
     end
   end
 
-  config.vm.provision "shell", inline: $install_multicast
+   config.vm.post_up_message = "
+Your Vault dev cluster has been successfully provisioned!
+To SSH into a Vault host, run the below command.
+  $ vagrant ssh
+You can interact with Vault using any of the CLI (https://www.vaultproject.io/docs/commands/index.html)
+or API (https://www.vaultproject.io/api/index.html) commands.
+  # The Root token for your Vault -dev instance is set to `root` and placed in /srv/vault/.vault-token,
+  # the `VAULT_TOKEN` environment variable has already been set for you
+  $ echo $VAULT_TOKEN
+  $ sudo cat /srv/vault/.vault-token
+  # Use the CLI to write and read a generic secret
+  $ vault kv put secret/cli foo=bar
+  $ vault kv get secret/cli
+  # Use the API to write and read a generic secret
+  $ curl -H \"X-Vault-Token: $VAULT_TOKEN\" -X POST -d '{\"data\": {\"bar\":\"baz\"}}' http://127.0.0.1:8200/v1/secret/data/api | jq '.'
+  $ curl -H \"X-Vault-Token: $VAULT_TOKEN\" http://127.0.0.1:8200/v1/secret/data/api | jq '.'
+Visit the Vault UI: http://#{private_ip}:#{vault_host_port}
+#{consul_install ? 'Visit the Consul UI: http://'+ private_ip + ':' + consul_host_port.to_s : ''}
+Don't forget to tear your VM down after.
+  $ vagrant destroy
+"
 end
-
-
-$install_common_tools = <<-SCRIPT
-# bridged traffic to iptables is enabled for kube-router.
-cat >> /etc/ufw/sysctl.conf <<EOF
-net/bridge/bridge-nf-call-ip6tables = 1
-net/bridge/bridge-nf-call-iptables = 1
-net/bridge/bridge-nf-call-arptables = 1
-EOF
-
-set -e
-IFNAME=$1
-ADDRESS="$(ip -4 addr show $IFNAME | grep "inet" | head -1 |awk '{print $2}' | cut -d/ -f1)"
-sed -e "s/^.*${HOSTNAME}.*/${ADDRESS} ${HOSTNAME} ${HOSTNAME}.local/" -i /etc/hosts
-
-# remove ubuntu-bionic entry
-sed -e '/^.*ubuntu-bionic.*/d' -i /etc/hosts
-
-# Patch OS
-apt-get update && apt-get upgrade -y
-
-# Create local host entries
-echo "10.0.0.10 master" >> /etc/hosts
-echo "10.0.0.11 node1" >> /etc/hosts
-echo "10.0.0.12 node2" >> /etc/hosts
-
-# disable swap
-swapoff -a
-sed -i '/swap/d' /etc/fstab
-
-# Install kubeadm, kubectl and kubelet
-export DEBIAN_FRONTEND=noninteractive
-apt-get -qq install ebtables ethtool
-apt-get -qq update
-apt-get -qq install -y docker.io apt-transport-https curl
-curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
-deb http://apt.kubernetes.io/ kubernetes-xenial main
-EOF
-apt-get -qq update
-apt-get -qq install -y kubelet kubeadm kubectl
-apt-mark hold kubelet kubectl kubeadm
-
-# Set external DNS
-sed -i -e 's/#DNS=/DNS=8.8.8.8/' /etc/systemd/resolved.conf
-service systemd-resolved restart
-SCRIPT
-
-$provision_master_node = <<-SHELL
-OUTPUT_FILE=/vagrant/join.sh
-KEY_FILE=/vagrant/id_rsa.pub
-rm -rf $OUTPUT_FILE
-rm -rf $KEY_FILE
-
-# Create key
-ssh-keygen -q -t rsa -b 4096 -N '' -f /home/vagrant/.ssh/id_rsa
-cat /home/vagrant/.ssh/id_rsa.pub >> /home/vagrant/.ssh/authorized_keys
-cat /home/vagrant/.ssh/id_rsa.pub > ${KEY_FILE}
-
-# Start cluster
-sudo kubeadm init --apiserver-advertise-address=10.0.0.10 --pod-network-cidr=10.244.0.0/16 | grep -Ei "kubeadm join|discovery-token-ca-cert-hash" > ${OUTPUT_FILE}
-chmod +x $OUTPUT_FILE
-
-# Configure kubectl for vagrant and root users
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
-sudo mkdir -p /root/.kube
-sudo cp -i /etc/kubernetes/admin.conf /root/.kube/config
-sudo chown -R root:root /root/.kube
-
-# Fix kubelet IP
-echo 'Environment="KUBELET_EXTRA_ARGS=--node-ip=10.0.0.10"' | sudo tee -a /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-
-# Use our flannel config file so that routing will work properly
-kubectl create -f /vagrant/kube-flannel.yml
-
-# Set alias on master for vagrant and root users
-echo "alias k=/usr/bin/kubectl" >> $HOME/.bash_profile
-sudo echo "alias k=/usr/bin/kubectl" >> /root/.bash_profile
-
-# Install the etcd client
-sudo apt install etcd-client
-
-sudo systemctl daemon-reload
-sudo systemctl restart kubelet
-SHELL
-
-$install_multicast = <<-SHELL
-apt-get -qq install -y avahi-daemon libnss-mdns
-SHELL
